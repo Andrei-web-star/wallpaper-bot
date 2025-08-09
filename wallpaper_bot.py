@@ -1,43 +1,55 @@
-import os, math, asyncio, logging
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from aiogram.filters import CommandStart
+import os
+import asyncio
+import logging
 
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import CommandStart
+from aiogram.types import (
+    Message,
+    ReplyKeyboardMarkup, KeyboardButton,
+    ReplyKeyboardRemove
+)
+
+# --- токен из переменных окружения ---
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise SystemExit("❌ Нет BOT_TOKEN. Задай его в Render → Environment.")
+
+# --- логирование ---
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("wallpaper-bot")
 
-# Токен берём из переменной окружения (НЕ хардкодим)
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-
-bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- память по пользователям ---
 user_data: dict[int, dict] = {}
 
-def kb_restart():
+def kb_restart() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="🔄 Посчитать заново")]],
         resize_keyboard=True
     )
 
-def pf(x: str) -> float | None:
+def pf(text: str) -> float | None:
+    """float с поддержкой запятой и тримом пробелов"""
+    if not text:
+        return None
     try:
-        return float(x.strip().replace(",", "."))
+        return float(text.strip().replace(",", "."))
     except Exception:
         return None
 
 @dp.message(CommandStart())
-async def start(m: Message):
-    user_data[m.chat.id] = {}
-    await m.answer(
-        "Привет! Я — Калькулятор обоев 🧮\n"
+async def start(message: Message):
+    user_data[message.chat.id] = {}
+    await message.answer(
+        "Привет! Я — Калькулятор обоев 🧮\n\n"
         "Помогу посчитать рулоны с учётом размеров комнаты, окон и дверей.\n"
-        "Все значения вводи в метрах (дробные можно с запятой или точкой).",
+        "Вводи значения в метрах, дробные можно с запятой или точкой.",
         reply_markup=ReplyKeyboardRemove()
     )
-    await m.answer("👉 Длина комнаты (например 5.0):")
+    await message.answer("👉 Длина комнаты (например 5.0):")
 
 @dp.message()
 async def flow(m: Message):
@@ -52,127 +64,186 @@ async def flow(m: Message):
     d = user_data.setdefault(c, {})
 
     try:
-        def need(key, prompt, must_positive=True):
+        # Шаги по порядку
+        if "length" not in d:
             v = pf(t)
-            if v is None or (must_positive and v <= 0) or ((not must_positive) and v < 0):
-                asyncio.create_task(m.answer("❌ Введи корректное число."))
-                return False
-            d[key] = v
-            asyncio.create_task(m.answer(prompt))
-            return True
-
-        if "length" not in d and need("length", "👉 Ширина комнаты:"): return
-        if "width" not in d and need("width", "🧱 Высота стен:"): return
-        if "height" not in d and need("height", "🪟 Сколько окон? (можно 0):"): return
-
-        if "windows" not in d:
-            v = pf(t)
-            if v is None or v < 0:
-                await m.answer("❌ Введи целое число ≥ 0")
+            if v is None or v <= 0:
+                await m.answer("❌ Введи корректную длину, например 5.0")
                 return
-            d["windows"] = int(v); d["wi"] = 1; d["w"] = []
-            if d["windows"] == 0:
-                await m.answer("🚪 Сколько дверей? (можно 0):")
-            else:
-                await m.answer("👉 Ширина окна №1:")
+            d["length"] = v
+            await m.answer("👉 Ширина комнаты (например 3.0):")
             return
 
-        if len(d["w"]) < d["windows"] * 2:
+        if "width" not in d:
             v = pf(t)
-            if v is None or v < 0:
-                await m.answer("❌ Введи число ≥ 0")
+            if v is None or v <= 0:
+                await m.answer("❌ Введи корректную ширину, например 3.0")
                 return
-            d["w"].append(v)
-            if len(d["w"]) % 2 == 1:
-                await m.answer(f"👉 Высота окна №{d['wi']}:")
+            d["width"] = v
+            await m.answer("👉 Высота стен (например 2.6):")
+            return
+
+        if "height" not in d:
+            v = pf(t)
+            if v is None or v <= 0:
+                await m.answer("❌ Введи корректную высоту, например 2.6")
+                return
+            d["height"] = v
+            await m.answer("🪟 Сколько окон? (целое число, например 1 или 0):")
+            return
+
+        if "windows" not in d:
+            iv = pf(t)
+            if iv is None or iv < 0 or int(iv) != iv:
+                await m.answer("❌ Введи целое число окон, например 1 или 0")
+                return
+            d["windows"] = int(iv)
+            d["window_areas"] = []
+            d["w_idx"] = 1
+            if d["windows"] == 0:
+                await m.answer("🚪 Сколько дверей? (целое число):")
             else:
-                d["wi"] += 1
-                if d["wi"] <= d["windows"]:
-                    await m.answer("👉 Ширина следующего окна:")
+                await m.answer(f"👉 Ширина окна №{d['w_idx']} (м):")
+            return
+
+        # Сбор размеров окон (парами: ширина, высота)
+        if len(d["window_areas"]) < d["windows"] * 2:
+            v = pf(t)
+            if v is None or v <= 0:
+                await m.answer("❌ Введи положительное число (м)")
+                return
+            d["window_areas"].append(v)
+            # если только что ввели ширину — спросим высоту
+            if len(d["window_areas"]) % 2 == 1:
+                await m.answer(f"👉 Высота окна №{d['w_idx']} (м):")
+            else:
+                d["w_idx"] += 1
+                if d["w_idx"] <= d["windows"]:
+                    await m.answer(f"👉 Ширина окна №{d['w_idx']} (м):")
                 else:
-                    await m.answer("🚪 Сколько дверей? (можно 0):")
+                    await m.answer("🚪 Сколько дверей? (целое число):")
             return
 
         if "doors" not in d:
-            v = pf(t)
-            if v is None or v < 0:
-                await m.answer("❌ Введи целое число ≥ 0")
+            iv = pf(t)
+            if iv is None or iv < 0 or int(iv) != iv:
+                await m.answer("❌ Введи целое число дверей, например 1 или 0")
                 return
-            d["doors"] = int(v); d["di"] = 1; d["d"] = []
+            d["doors"] = int(iv)
+            d["door_areas"] = []
+            d["d_idx"] = 1
             if d["doors"] == 0:
-                await m.answer("📏 Ширина рулона (м):")
+                await m.answer("📏 Ширина рулона (например 0.53):")
             else:
-                await m.answer("👉 Ширина двери №1:")
+                await m.answer(f"👉 Ширина двери №{d['d_idx']} (м):")
             return
 
-        if len(d["d"]) < d["doors"] * 2:
+        # Сбор размеров дверей
+        if len(d["door_areas"]) < d["doors"] * 2:
             v = pf(t)
-            if v is None or v < 0:
-                await m.answer("❌ Введи число ≥ 0")
+            if v is None or v <= 0:
+                await m.answer("❌ Введи положительное число (м)")
                 return
-            d["d"].append(v)
-            if len(d["d"]) % 2 == 1:
-                await m.answer(f"👉 Высота двери №{d['di']}:")
+            d["door_areas"].append(v)
+            if len(d["door_areas"]) % 2 == 1:
+                await m.answer(f"👉 Высота двери №{d['d_idx']} (м):")
             else:
-                d["di"] += 1
-                if d["di"] <= d["doors"]:
-                    await m.answer("👉 Ширина следующей двери:")
+                d["d_idx"] += 1
+                if d["d_idx"] <= d["doors"]:
+                    await m.answer(f"👉 Ширина двери №{d['d_idx']} (м):")
                 else:
-                    await m.answer("📏 Ширина рулона (м):")
+                    await m.answer("📏 Ширина рулона (например 0.53):")
             return
 
-        if "roll_w" not in d and need("roll_w", "📏 Длина рулона (м):"): return
-        if "roll_l" not in d and need("roll_l", "🔁 Раппорт (м). Если нет — 0.0:", must_positive=True): return
+        if "roll_width" not in d:
+            v = pf(t)
+            if v is None or v <= 0:
+                await m.answer("❌ Ширина рулона в метрах, например 0.53")
+                return
+            d["roll_width"] = v
+            await m.answer("📏 Длина рулона (например 10.05):")
+            return
+
+        if "roll_length" not in d:
+            v = pf(t)
+            if v is None or v <= 0:
+                await m.answer("❌ Длина рулона в метрах, например 10.05")
+                return
+            d["roll_length"] = v
+            await m.answer("🔁 Раппорт (0, 0.32, 0.64 и т.п.):")
+            return
 
         if "rapport" not in d:
             v = pf(t)
             if v is None or v < 0:
-                await m.answer("❌ Введи число ≥ 0")
+                await m.answer("❌ Раппорт не должен быть отрицательным")
                 return
             d["rapport"] = v
 
-            L, W, H = d["length"], d["width"], d["height"]
-            per = 2 * (L + W)
-            wall = per * H
+            # ---- расчет ----
+            perimeter = 2 * (d["length"] + d["width"])
+            wall_area = perimeter * d["height"]
 
-            win = sum(d["w"][i] * d["w"][i+1] for i in range(0, len(d["w"]), 2)) if d["w"] else 0.0
-            drs = sum(d["d"][i] * d["d"][i+1] for i in range(0, len(d["d"]), 2)) if d["d"] else 0.0
-            net = max(0.0, wall - win - drs)
+            window_area = sum(
+                d["window_areas"][i] * d["window_areas"][i + 1]
+                for i in range(0, len(d["window_areas"]), 2)
+            )
+            door_area = sum(
+                d["door_areas"][i] * d["door_areas"][i + 1]
+                for i in range(0, len(d["door_areas"]), 2)
+            )
 
-            rap = d["rapport"]
-            drop_h = math.ceil(H / rap) * rap if rap > 0 else H
+            net_area = wall_area - window_area - door_area
 
-            strips_per_roll = int(d["roll_l"] // drop_h)
-            if strips_per_roll <= 0:
-                await m.answer("❗️Из рулона не получается ни одной полосы. Проверь параметры.",
-                               reply_markup=kb_restart())
+            strip_height = d["height"] + d["rapport"]
+            if strip_height <= 0 or d["roll_width"] <= 0:
+                await m.answer("❌ Некорректные параметры для расчёта.")
                 user_data[c] = {}
                 return
 
-            strips_needed = math.ceil(per / d["roll_w"])
-            rolls = math.ceil(strips_needed / strips_per_roll)
+            strips_per_roll = int(d["roll_length"] // strip_height)  # целых полос из рулона
+            strips_needed = int(perimeter // d["roll_width"])        # сколько полос на периметр
+
+            if strips_per_roll == 0:
+                await m.answer("❌ Слишком большой раппорт/высота — из рулона не выходит ни одной целой полосы.")
+                user_data[c] = {}
+                return
+
+            rolls_needed = (strips_needed + strips_per_roll - 1) // strips_per_roll  # округление вверх
 
             await m.answer(
-                "✅ <b>Результат</b>\n"
-                f"🧱 Площадь стен: <b>{wall:.2f} м²</b>\n"
-                f"🪟 Окна: <b>{win:.2f} м²</b> • 🚪 Двери: <b>{drs:.2f} м²</b>\n"
-                f"📐 Чистая площадь: <b>{net:.2f} м²</b>\n\n"
-                f"📏 Высота полосы: <b>{drop_h:.2f} м</b>, из рулона: <b>{strips_per_roll}</b>\n"
-                f"📏 Полос нужно: <b>{strips_needed}</b>\n"
-                f"📦 Рулонов: <b>{rolls}</b>\n\n"
-                f"📝 Рекомендуем взять +1 рулон на запас.",
-                reply_markup=kb_restart()
+                "✅ Результаты:\n\n"
+                f"• Площадь стен: <b>{wall_area:.2f} м²</b>\n"
+                f"• Площадь окон: <b>{window_area:.2f} м²</b>\n"
+                f"• Площадь дверей: <b>{door_area:.2f} м²</b>\n"
+                f"• Чистая площадь оклейки: <b>{net_area:.2f} м²</b>\n"
+                f"• Полос нужно: <b>{strips_needed}</b>\n"
+                f"• Рулонов (с раппортом): <b>{rolls_needed}</b>\n\n"
+                f"Совет: возьми на 1 рулон больше — на запас.",
+                reply_markup=kb_restart(),
+                parse_mode="HTML"
             )
+
+            # сбросим состояние, чтобы новая сессия начиналась с длины
+            user_data[c] = {}
             return
+
+        # если что-то вне сценария
+        await m.answer("❌ Ошибка. Нажми «🔄 Посчитать заново».", reply_markup=kb_restart())
 
     except Exception as e:
         log.exception("flow error: %s", e)
-        await m.answer("❌ Ошибка. Нажми «Посчитать заново».", reply_markup=kb_restart())
+        await m.answer("❌ Неожиданная ошибка. Нажми «🔄 Посчитать заново».", reply_markup=kb_restart())
+        user_data[c] = {}
 
+# --- запуск ---
 async def main():
-    # снимаем вебхук и чистим старые апдейты — чтобы не было конфликта
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    # На всякий сбрасываем вебхук, если он вдруг стоял
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())

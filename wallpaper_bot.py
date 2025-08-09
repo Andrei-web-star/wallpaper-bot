@@ -91,8 +91,7 @@ async def flow(m: Message):
         # 1) Длина
         if "length" not in d:
             v = pf(t)
-            if not need_positive(m, d, "length", v, "👉 Укажи <b>ширину</b> комнаты (например: 
-<code>3</code>):"):
+            if not need_positive(m, d, "length", v, "👉 Укажи <b>ширину</b> комнаты (например: <code>3</code>):"):
                 return
             return
 
@@ -106,8 +105,7 @@ async def flow(m: Message):
         # 3) Высота
         if "height" not in d:
             v = pf(t)
-            if not need_positive(m, d, "height", v, "🪟 Сколько <b>окон</b> в комнате? (например: 
-<code>1</code>):"):
+            if not need_positive(m, d, "height", v, "🪟 Сколько <b>окон</b> в комнате? (например: <code>1</code>):"):
                 return
             return
 

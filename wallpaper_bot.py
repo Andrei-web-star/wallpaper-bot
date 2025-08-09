@@ -183,8 +183,7 @@ async def flow(m: Message):
         # 8) Ширина рулона
         if "roll_w" not in d:
             v = pf(t)
-            if not need_positive(m, d, "roll_w", v, "📏 Укажи <b>длину рулона</b> (м), например: 
-<code>10.05</code>"):
+            if not need_positive(m, d, "roll_w", v, "📏 Укажи <b>длину рулона</b> (м), например: <code>10.05</code>"):
                 return
             return
 

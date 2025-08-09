@@ -190,8 +190,7 @@ async def get_roll_l(m: Message, state: FSMContext):
     if not v or v <= 0:
         return await ask(m, "❌ Введи положительное число. Пример: <code>10.05</code>")
     await state.update_data(roll_length=v)
-    await ask(m, "🔁 Укажи <b>раппорт</b> (м). Если нет — введи <code>0</code>. Примеры: <code>0</code>, 
-<code>0.32</code>, <code>0.64</code>:")
+    await ask(m, "🔁 Укажи <b>раппорт</b> (м). Если нет — введи <code>0</code>. Примеры: <code>0</code>, <code>0.32</code>, <code>0.64</code>:")
     await state.set_state(S.rapport)
 
 # ===== Финальный расчёт =====
@@ -228,8 +227,7 @@ async def calc(m: Message, state: FSMContext):
         if strips_height <= 0 or roll_l < strips_height:
             return await m.answer(
                 "❌ Невозможно нарезать ни одной полосы из рулона.\n"
-                "Проверь значения: высота, длина рулона и раппорт.",
-                reply_markup=kb_restart()
+                "Проверь значения: высота, длина рулона и раппорт.",reply_markup=kb_restart()
             )
 
         strips_per_roll = int(roll_l // strips_height)
